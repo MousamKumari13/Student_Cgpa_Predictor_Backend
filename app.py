@@ -1,66 +1,82 @@
 from flask import Flask, request, jsonify
 import pickle
 import numpy as np
+import pandas as pd
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-# Load trained models
-#with open("Lr_model.pkl", "rb") as f:
- #   Lr_Model = pickle.load(f)
-#with open("DT_model.pkl", "rb") as f:
- #   DT_Model = pickle.load(f)
-#with open("Rf_model.pkl", "rb") as f:
- #   Rf_Model = pickle.load(f)
-with open("gb_model.pkl", "rb") as f:
-     gb_model = pickle.load(f)
-#with open("xgb_model.pkl", "rb") as f:
- #   xgb_model = pickle.load(f)
-#with open("knn_model.pkl", "rb") as f:
- #   knn_model = pickle.load(f)
-#with open("svr_model.pkl", "rb") as f:
- #   svr_model = pickle.load(f)
-
-# ✅ Use best performing model (change if needed)
-best_model = gb_model  # You can change to xgb_model if that performs better
+# Load model and scaler
+model = pickle.load(open("svr_model.pkl", "rb"))  # Or use xgb_model.pkl
+scaler = pickle.load(open("scaler.pkl", "rb"))
 
 # Mapping functions
 def yes_no_to_int(value):
     return 1 if value.lower() == "yes" else 0
 
 def motivation_to_int(value):
-    mapping = {"low": 0, "medium": 1, "high": 2}
-    return mapping.get(value.lower(), 1)
+    return {"low": 0, "medium": 1, "high": 2}.get(value.lower(), 1)
 
 def health_to_int(value):
-    mapping = {"low": 0, "medium": 1, "high": 2}
-    return mapping.get(value.lower(), 1)
+    return {"low": 0, "medium": 1, "high": 2}.get(value.lower(), 1)
 
 def stress_to_int(value):
-    mapping = {"high": 0, "medium": 1, "low": 2}
-    return mapping.get(value.lower(), 1)
+    return {"high": 0, "medium": 1, "low": 2}.get(value.lower(), 1)
 
 @app.route("/predict", methods=['POST'])
 def predict():
-    data = request.get_json()
-
     try:
+        data = request.get_json()
+        print("Incoming JSON data:", data)
+
+        # Parse and convert values
         Sem1 = float(data['Sem1'])
         Study_Hr = float(data['Study_Hr'])
         Sleep_Hr = float(data['Sleep_Hr'])
-        Active_backlog = yes_no_to_int(data['Active_backlog'])
-        ExtraCurriculum = float(data['ExtraCurriculum'])
-        Screen_time = float(data['Screen_time'])
+        Backlog = yes_no_to_int(data['Active_backlog'])
+        Extra = float(data['ExtraCurriculum'])
+        Screen = float(data['Screen_time'])
         Health = health_to_int(data['Health'])
-        stress_level = stress_to_int(data['stress_level'])
+        Stress = stress_to_int(data['stress_level'])
         Motivation = motivation_to_int(data['Motivation'])
 
-        input_features = np.array([[Sem1, Study_Hr, Sleep_Hr, Active_backlog,
-                                    ExtraCurriculum, Screen_time, Health,
-                                    stress_level, Motivation]])
+        # New engineered feature
+        StudySleepCombo = Study_Hr * np.exp(-(Sleep_Hr - 7) ** 2 / 4)
 
-        prediction = best_model.predict(input_features)[0]
+        # Create raw DataFrame
+        input_df = pd.DataFrame([[
+            Sem1, Study_Hr, Sleep_Hr, Backlog, Extra, Screen,
+            Health, Stress, Motivation, StudySleepCombo
+        ]], columns=[
+            "Sem1", "Study Hours", "Sleeping Hours", "Active Backlog",
+            "Extra Curricular", "Screen Time", "Health Condition",
+            "Stress Level", "Motivation Level", "StudySleepCombo"
+        ])
+
+        # Apply same weights as training
+        input_df["Sem1"] *= 1.0
+        input_df["Study Hours"] *= 15.0
+        input_df["Sleeping Hours"] *= .1
+        input_df["Screen Time"] *= 3.5
+        input_df["Extra Curricular"] *= 1.5
+        input_df["Health Condition"] *= 1.1
+        input_df["Stress Level"] *= 1.1
+        input_df["Motivation Level"] *= 1.2
+        input_df["StudySleepCombo"] *= 10.0
+
+        # Debug: Print final input before scaling
+        print("Input to model (after weights, before scaling):\n", input_df)
+
+        # Apply scaler
+        input_scaled = scaler.transform(input_df)
+
+        # Convert the scaled input into DataFrame with correct feature names
+        input_scaled_df = pd.DataFrame(input_scaled, columns=input_df.columns)
+
+
+        # Predict
+        prediction = model.predict(input_scaled_df)[0]
         prediction = np.clip(prediction, 1, 10)
 
         return jsonify({'prediction': round(prediction, 2)})
@@ -69,4 +85,4 @@ def predict():
         return jsonify({'error': str(e)}), 400
 
 if __name__ == "__main__":
-    app.run(debug=True , port=5001)
+    app.run(debug=True, port=5001)
